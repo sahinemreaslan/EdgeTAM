@@ -1,0 +1,27 @@
+# EdgeTAM Deployment Requirements
+#
+# Install with: pip install -r deploy/requirements.txt
+
+# Core dependencies
+numpy>=1.21.0
+pillow>=9.0.0
+opencv-python>=4.5.0
+
+# ONNX Runtime (choose one based on your hardware)
+# CPU-only:
+onnxruntime>=1.16.0
+
+# GPU (NVIDIA CUDA):
+# onnxruntime-gpu>=1.16.0
+
+# ONNX tools (optional, for verification)
+onnx>=1.14.0
+
+# TensorRT (optional, for NVIDIA GPU deployment)
+# Note: TensorRT requires separate installation from NVIDIA
+# See: https://developer.nvidia.com/tensorrt
+# tensorrt>=8.6.0
+# pycuda>=2022.1
+
+# Additional utilities
+tqdm>=4.60.0

@@ -55,6 +55,34 @@ Note:
 3. If you see a message like `Failed to build the SAM 2 CUDA extension` during installation, you can ignore it and still use EdgeTAM (some post-processing functionality may be limited, but it doesn't affect the results in most cases).
 
 
+## Deployment
+
+EdgeTAM can be deployed in production environments using ONNX or TensorRT formats for optimized inference:
+
+### Quick Deployment
+
+```bash
+# 1. Export to ONNX
+python export_to_onnx.py --checkpoint checkpoints/edgetam.pt --output-dir onnx_models
+
+# 2. Run inference
+python deploy/simple_inference.py --onnx-dir onnx_models --image your_image.jpg --point 512,512
+```
+
+### Deployment Options
+
+- **ONNX Runtime**: Cross-platform deployment with good performance
+- **TensorRT**: NVIDIA GPU-optimized deployment for maximum performance
+
+For detailed deployment instructions, including TensorRT conversion, benchmarking, and integration examples, see the [Deployment Guide](./deploy/README.md).
+
+### Installation for Deployment
+
+```bash
+# Install deployment dependencies
+pip install -r deploy/requirements.txt
+```
+
 ## Getting Started
 
 ### Downloading the model
