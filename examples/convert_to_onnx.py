@@ -103,7 +103,12 @@ class MaskDecoderWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.sam_mask_decoder = model.sam_mask_decoder
+        self.sam_prompt_encoder = model.sam_prompt_encoder
         self.image_size = model.image_size
+
+        # Positional encoding'i önceden hesapla ve buffer olarak kaydet
+        with torch.no_grad():
+            self.register_buffer('image_pe', self.sam_prompt_encoder.get_dense_pe())
 
     def forward(self, image_embeddings, sparse_prompt_embeddings, dense_prompt_embeddings):
         """
@@ -117,7 +122,7 @@ class MaskDecoderWrapper(torch.nn.Module):
         """
         low_res_masks, iou_predictions, _, _ = self.sam_mask_decoder(
             image_embeddings=image_embeddings,
-            image_pe=self.sam_mask_decoder.get_dense_pe(),
+            image_pe=self.image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
             multimask_output=False,

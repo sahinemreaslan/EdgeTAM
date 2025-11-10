@@ -186,7 +186,7 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
         pytorch_model.sam_mask_decoder.eval()
         pytorch_masks, pytorch_iou, _, _ = pytorch_model.sam_mask_decoder(
             image_embeddings=dummy_image_embeddings,
-            image_pe=pytorch_model.sam_mask_decoder.get_dense_pe(),
+            image_pe=pytorch_model.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=dummy_sparse_embeddings,
             dense_prompt_embeddings=dummy_dense_embeddings,
             multimask_output=False,
