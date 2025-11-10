@@ -129,28 +129,23 @@ def validate_image_encoder(pytorch_model, onnx_session, image_size=1024, toleran
 
     print(f"\nTest input shape: {dummy_image.shape}")
 
-    # PyTorch inference
+    # PyTorch inference - ImageEncoderWrapper kullan (ONNX export ile aynı)
     print("\n🔧 PyTorch inference...")
     with torch.no_grad():
-        pytorch_model.image_encoder.eval()
-        pytorch_output = pytorch_model.image_encoder(dummy_image)
+        # Import wrapper class
+        from examples.convert_to_onnx import ImageEncoderWrapper
+
+        # Wrapper oluştur
+        encoder_wrapper = ImageEncoderWrapper(pytorch_model)
+        encoder_wrapper.eval()
+
+        # Forward pass
+        pytorch_vision_features, pytorch_feature_0, pytorch_feature_1 = encoder_wrapper(dummy_image)
 
     # ONNX inference
     print("🔧 ONNX inference...")
     onnx_input = {onnx_session.get_inputs()[0].name: dummy_image.numpy()}
     onnx_outputs = onnx_session.run(None, onnx_input)
-
-    # Karşılaştır - ONNX 3 output döndürüyor: vision_features, feature_0, feature_1
-    # PyTorch dict döndürüyor
-    pytorch_vision_features = pytorch_output["vision_features"]
-
-    # High-res features'ı ONNX wrapper'daki gibi işle
-    if pytorch_model.use_high_res_features_in_sam:
-        pytorch_feature_0 = pytorch_model.sam_mask_decoder.conv_s0(pytorch_output["backbone_fpn"][0])
-        pytorch_feature_1 = pytorch_model.sam_mask_decoder.conv_s1(pytorch_output["backbone_fpn"][1])
-    else:
-        pytorch_feature_0 = pytorch_output["backbone_fpn"][0]
-        pytorch_feature_1 = pytorch_output["backbone_fpn"][1]
 
     # Vision features karşılaştır
     success_vision = compare_outputs(
@@ -237,11 +232,11 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
     # ONNX inference - processed features kullan
     print("🔧 ONNX inference...")
     onnx_inputs = {
-        onnx_session.get_inputs()[0].name: dummy_image_embeddings.numpy(),
-        onnx_session.get_inputs()[1].name: dummy_sparse_embeddings.numpy(),
-        onnx_session.get_inputs()[2].name: dummy_dense_embeddings.numpy(),
-        onnx_session.get_inputs()[3].name: dummy_high_res_feature_0.numpy(),
-        onnx_session.get_inputs()[4].name: dummy_high_res_feature_1.numpy(),
+        onnx_session.get_inputs()[0].name: dummy_image_embeddings.detach().numpy(),
+        onnx_session.get_inputs()[1].name: dummy_sparse_embeddings.detach().numpy(),
+        onnx_session.get_inputs()[2].name: dummy_dense_embeddings.detach().numpy(),
+        onnx_session.get_inputs()[3].name: dummy_high_res_feature_0.detach().numpy(),
+        onnx_session.get_inputs()[4].name: dummy_high_res_feature_1.detach().numpy(),
     }
     onnx_outputs = onnx_session.run(None, onnx_inputs)
 
