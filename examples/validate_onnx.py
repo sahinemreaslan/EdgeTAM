@@ -143,8 +143,14 @@ def validate_image_encoder(pytorch_model, onnx_session, image_size=1024, toleran
     # Karşılaştır - ONNX 3 output döndürüyor: vision_features, feature_0, feature_1
     # PyTorch dict döndürüyor
     pytorch_vision_features = pytorch_output["vision_features"]
-    pytorch_feature_0 = pytorch_output["backbone_fpn"][0]
-    pytorch_feature_1 = pytorch_output["backbone_fpn"][1]
+
+    # High-res features'ı ONNX wrapper'daki gibi işle
+    if pytorch_model.use_high_res_features_in_sam:
+        pytorch_feature_0 = pytorch_model.sam_mask_decoder.conv_s0(pytorch_output["backbone_fpn"][0])
+        pytorch_feature_1 = pytorch_model.sam_mask_decoder.conv_s1(pytorch_output["backbone_fpn"][1])
+    else:
+        pytorch_feature_0 = pytorch_output["backbone_fpn"][0]
+        pytorch_feature_1 = pytorch_output["backbone_fpn"][1]
 
     # Vision features karşılaştır
     success_vision = compare_outputs(
@@ -186,26 +192,35 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
     dummy_image_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
     dummy_sparse_embeddings = torch.randn(1, 2, embed_dim)
     dummy_dense_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
-    dummy_high_res_feature_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
-    dummy_high_res_feature_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
+
+    # High-res features - bunlar image encoder'dan RAW olarak gelir
+    # Wrapper içinde conv_s0 ve conv_s1 ile işlenir
+    dummy_high_res_raw_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
+    dummy_high_res_raw_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
+
+    # Processed high-res features (ONNX input olarak kullanılacak)
+    if pytorch_model.use_high_res_features_in_sam:
+        dummy_high_res_feature_0 = pytorch_model.sam_mask_decoder.conv_s0(dummy_high_res_raw_0)
+        dummy_high_res_feature_1 = pytorch_model.sam_mask_decoder.conv_s1(dummy_high_res_raw_1)
+    else:
+        dummy_high_res_feature_0 = dummy_high_res_raw_0
+        dummy_high_res_feature_1 = dummy_high_res_raw_1
 
     print(f"\nTest input shapes:")
     print(f"  Image embeddings: {dummy_image_embeddings.shape}")
     print(f"  Sparse embeddings: {dummy_sparse_embeddings.shape}")
     print(f"  Dense embeddings: {dummy_dense_embeddings.shape}")
-    print(f"  High-res feature 0: {dummy_high_res_feature_0.shape}")
-    print(f"  High-res feature 1: {dummy_high_res_feature_1.shape}")
+    print(f"  High-res feature 0 (processed): {dummy_high_res_feature_0.shape}")
+    print(f"  High-res feature 1 (processed): {dummy_high_res_feature_1.shape}")
 
     # PyTorch inference
     print("\n🔧 PyTorch inference...")
     with torch.no_grad():
         pytorch_model.sam_mask_decoder.eval()
 
-        # High-res features'ı hazırla
+        # High-res features'ı hazırla - artık zaten processed
         if pytorch_model.use_high_res_features_in_sam:
-            feat_s0 = pytorch_model.sam_mask_decoder.conv_s0(dummy_high_res_feature_0)
-            feat_s1 = pytorch_model.sam_mask_decoder.conv_s1(dummy_high_res_feature_1)
-            high_res_features = [feat_s0, feat_s1]
+            high_res_features = [dummy_high_res_feature_0, dummy_high_res_feature_1]
         else:
             high_res_features = None
 
@@ -219,7 +234,7 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
             high_res_features=high_res_features,
         )
 
-    # ONNX inference
+    # ONNX inference - processed features kullan
     print("🔧 ONNX inference...")
     onnx_inputs = {
         onnx_session.get_inputs()[0].name: dummy_image_embeddings.numpy(),

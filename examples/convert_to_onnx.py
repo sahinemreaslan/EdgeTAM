@@ -31,9 +31,16 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 class ImageEncoderWrapper(torch.nn.Module):
     """Image Encoder için ONNX export wrapper"""
-    def __init__(self, image_encoder):
+    def __init__(self, model):
         super().__init__()
-        self.image_encoder = image_encoder
+        self.image_encoder = model.image_encoder
+        self.use_high_res_features = model.use_high_res_features_in_sam
+
+        # EdgeTAM'de high-res features için conv layers var
+        # SAM2Base'deki forward_image metodunda bunlar pre-compute ediliyor
+        if self.use_high_res_features:
+            self.conv_s0 = model.sam_mask_decoder.conv_s0
+            self.conv_s1 = model.sam_mask_decoder.conv_s1
 
     def forward(self, x):
         """
@@ -41,8 +48,8 @@ class ImageEncoderWrapper(torch.nn.Module):
             x: (B, C, H, W) - Normalize edilmiş görüntü
         Returns:
             vision_features: Main feature map (B, C, H/16, W/16)
-            feature_0: High-res feature level 0 (B, C, H/4, W/4)
-            feature_1: High-res feature level 1 (B, C, H/8, W/8)
+            feature_0: High-res feature level 0 processed (B, C/8, H/4, W/4)
+            feature_1: High-res feature level 1 processed (B, C/4, H/8, W/8)
         """
         backbone_out = self.image_encoder(x)
 
@@ -50,14 +57,16 @@ class ImageEncoderWrapper(torch.nn.Module):
         vision_features = backbone_out["vision_features"]
 
         # High-resolution features for mask decoder
-        # backbone_fpn içinde features var: [level0, level1, level2]
-        # EdgeTAM: level 0 ve 1 high-res için kullanılıyor
         backbone_fpn = backbone_out["backbone_fpn"]
 
-        # feature_0: En yüksek resolution (4x of main features)
-        # feature_1: Orta resolution (2x of main features)
-        feature_0 = backbone_fpn[0]  # Highest resolution
-        feature_1 = backbone_fpn[1]  # Mid resolution
+        if self.use_high_res_features:
+            # SAM2Base.forward_image metodundaki gibi pre-process et
+            # Bu conv'lar mask decoder'da tekrar çağrılmasın diye burada yapılıyor
+            feature_0 = self.conv_s0(backbone_fpn[0])  # Highest resolution
+            feature_1 = self.conv_s1(backbone_fpn[1])  # Mid resolution
+        else:
+            feature_0 = backbone_fpn[0]
+            feature_1 = backbone_fpn[1]
 
         return vision_features, feature_0, feature_1
 
@@ -128,18 +137,16 @@ class MaskDecoderWrapper(torch.nn.Module):
             image_embeddings: Image encoder features (B, C, H, W)
             sparse_prompt_embeddings: Sparse prompt embeddings
             dense_prompt_embeddings: Dense prompt embeddings
-            high_res_feature_0: High-res feature level 0 (B, C, 4*H, 4*W)
-            high_res_feature_1: High-res feature level 1 (B, C, 2*H, 2*W)
+            high_res_feature_0: Already processed high-res feature level 0 (B, C/8, 4*H, 4*W)
+            high_res_feature_1: Already processed high-res feature level 1 (B, C/4, 2*H, 2*W)
         Returns:
             masks: (B, N, H, W) - Predicted masks
             iou_predictions: (B, N) - IoU predictions
         """
         # High-res features'ı hazırla
+        # NOT: Features artık image encoder'dan pre-processed olarak geliyor
         if self.use_high_res_features:
-            # SAM decoder conv_s0 ve conv_s1 ile project et
-            feat_s0 = self.sam_mask_decoder.conv_s0(high_res_feature_0)
-            feat_s1 = self.sam_mask_decoder.conv_s1(high_res_feature_1)
-            high_res_features = [feat_s0, feat_s1]
+            high_res_features = [high_res_feature_0, high_res_feature_1]
         else:
             high_res_features = None
 
@@ -163,7 +170,7 @@ def export_image_encoder(model, output_path, opset_version=17):
     print("="*60)
 
     # Wrapper oluştur
-    encoder = ImageEncoderWrapper(model.image_encoder)
+    encoder = ImageEncoderWrapper(model)
     encoder.eval()
 
     # Örnek input
@@ -222,11 +229,19 @@ def export_mask_decoder(model, output_path, opset_version=17):
     dummy_sparse_embeddings = torch.randn(1, 2, embed_dim)  # 2 prompts
     dummy_dense_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
 
-    # High-resolution features
-    # feature_0: 4x resolution (256x256 for 1024x1024 input)
-    # feature_1: 2x resolution (128x128 for 1024x1024 input)
-    dummy_high_res_feature_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
-    dummy_high_res_feature_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
+    # High-resolution features - bunlar image encoder'dan processed olarak gelir
+    # conv_s0 ve conv_s1 zaten image encoder wrapper'da uygulanmış olacak
+    # feature_0: 4x resolution (256x256 for 1024x1024 input), processed to C/8 channels
+    # feature_1: 2x resolution (128x128 for 1024x1024 input), processed to C/4 channels
+    # SAM decoder conv_s0/conv_s1 output dimensions: transformer_dim // 8 and transformer_dim // 4
+    if model.use_high_res_features_in_sam:
+        # Processed dimensions
+        dummy_high_res_feature_0 = torch.randn(1, embed_dim // 8, embed_size * 4, embed_size * 4)
+        dummy_high_res_feature_1 = torch.randn(1, embed_dim // 4, embed_size * 2, embed_size * 2)
+    else:
+        # Raw dimensions (not used if use_high_res_features is False)
+        dummy_high_res_feature_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
+        dummy_high_res_feature_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
 
     # Input ve output isimleri
     input_names = [
