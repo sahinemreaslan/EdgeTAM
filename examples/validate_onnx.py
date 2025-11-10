@@ -138,27 +138,39 @@ def validate_image_encoder(pytorch_model, onnx_session, image_size=1024, toleran
     # ONNX inference
     print("🔧 ONNX inference...")
     onnx_input = {onnx_session.get_inputs()[0].name: dummy_image.numpy()}
-    onnx_output = onnx_session.run(None, onnx_input)
+    onnx_outputs = onnx_session.run(None, onnx_input)
 
-    # Karşılaştır
-    # SAM2'de image encoder dict döndürebilir
-    if isinstance(pytorch_output, dict):
-        # İlk feature'ı karşılaştır
-        if "vision_features" in pytorch_output:
-            pytorch_feat = pytorch_output["vision_features"]
-        else:
-            pytorch_feat = list(pytorch_output.values())[0]
-    else:
-        pytorch_feat = pytorch_output
+    # Karşılaştır - ONNX 3 output döndürüyor: vision_features, feature_0, feature_1
+    # PyTorch dict döndürüyor
+    pytorch_vision_features = pytorch_output["vision_features"]
+    pytorch_feature_0 = pytorch_output["backbone_fpn"][0]
+    pytorch_feature_1 = pytorch_output["backbone_fpn"][1]
 
-    success = compare_outputs(
-        pytorch_feat,
-        onnx_output[0],
-        name="Image Encoder Features",
+    # Vision features karşılaştır
+    success_vision = compare_outputs(
+        pytorch_vision_features,
+        onnx_outputs[0],
+        name="Vision Features",
         tolerance=tolerance
     )
 
-    return success
+    # Feature 0 karşılaştır
+    success_feat0 = compare_outputs(
+        pytorch_feature_0,
+        onnx_outputs[1],
+        name="High-Res Feature 0",
+        tolerance=tolerance
+    )
+
+    # Feature 1 karşılaştır
+    success_feat1 = compare_outputs(
+        pytorch_feature_1,
+        onnx_outputs[2],
+        name="High-Res Feature 1",
+        tolerance=tolerance
+    )
+
+    return success_vision and success_feat0 and success_feat1
 
 
 def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
@@ -174,16 +186,29 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
     dummy_image_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
     dummy_sparse_embeddings = torch.randn(1, 2, embed_dim)
     dummy_dense_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
+    dummy_high_res_feature_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
+    dummy_high_res_feature_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
 
     print(f"\nTest input shapes:")
     print(f"  Image embeddings: {dummy_image_embeddings.shape}")
     print(f"  Sparse embeddings: {dummy_sparse_embeddings.shape}")
     print(f"  Dense embeddings: {dummy_dense_embeddings.shape}")
+    print(f"  High-res feature 0: {dummy_high_res_feature_0.shape}")
+    print(f"  High-res feature 1: {dummy_high_res_feature_1.shape}")
 
     # PyTorch inference
     print("\n🔧 PyTorch inference...")
     with torch.no_grad():
         pytorch_model.sam_mask_decoder.eval()
+
+        # High-res features'ı hazırla
+        if pytorch_model.use_high_res_features_in_sam:
+            feat_s0 = pytorch_model.sam_mask_decoder.conv_s0(dummy_high_res_feature_0)
+            feat_s1 = pytorch_model.sam_mask_decoder.conv_s1(dummy_high_res_feature_1)
+            high_res_features = [feat_s0, feat_s1]
+        else:
+            high_res_features = None
+
         pytorch_masks, pytorch_iou, _, _ = pytorch_model.sam_mask_decoder(
             image_embeddings=dummy_image_embeddings,
             image_pe=pytorch_model.sam_prompt_encoder.get_dense_pe(),
@@ -191,7 +216,7 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
             dense_prompt_embeddings=dummy_dense_embeddings,
             multimask_output=False,
             repeat_image=False,
-            high_res_features=None,
+            high_res_features=high_res_features,
         )
 
     # ONNX inference
@@ -200,6 +225,8 @@ def validate_mask_decoder(pytorch_model, onnx_session, tolerance=1e-3):
         onnx_session.get_inputs()[0].name: dummy_image_embeddings.numpy(),
         onnx_session.get_inputs()[1].name: dummy_sparse_embeddings.numpy(),
         onnx_session.get_inputs()[2].name: dummy_dense_embeddings.numpy(),
+        onnx_session.get_inputs()[3].name: dummy_high_res_feature_0.numpy(),
+        onnx_session.get_inputs()[4].name: dummy_high_res_feature_1.numpy(),
     }
     onnx_outputs = onnx_session.run(None, onnx_inputs)
 

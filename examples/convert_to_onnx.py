@@ -40,16 +40,26 @@ class ImageEncoderWrapper(torch.nn.Module):
         Args:
             x: (B, C, H, W) - Normalize edilmiş görüntü
         Returns:
-            features: Image features
+            vision_features: Main feature map (B, C, H/16, W/16)
+            feature_0: High-res feature level 0 (B, C, H/4, W/4)
+            feature_1: High-res feature level 1 (B, C, H/8, W/8)
         """
         backbone_out = self.image_encoder(x)
-        # Backbone output'ları al
-        if isinstance(backbone_out, dict):
-            # Multi-level features
-            features = backbone_out
-        else:
-            features = {"vision_features": backbone_out}
-        return features
+
+        # Main vision features (en düşük resolution)
+        vision_features = backbone_out["vision_features"]
+
+        # High-resolution features for mask decoder
+        # backbone_fpn içinde features var: [level0, level1, level2]
+        # EdgeTAM: level 0 ve 1 high-res için kullanılıyor
+        backbone_fpn = backbone_out["backbone_fpn"]
+
+        # feature_0: En yüksek resolution (4x of main features)
+        # feature_1: Orta resolution (2x of main features)
+        feature_0 = backbone_fpn[0]  # Highest resolution
+        feature_1 = backbone_fpn[1]  # Mid resolution
+
+        return vision_features, feature_0, feature_1
 
 
 class PromptEncoderWrapper(torch.nn.Module):
@@ -105,21 +115,34 @@ class MaskDecoderWrapper(torch.nn.Module):
         self.sam_mask_decoder = model.sam_mask_decoder
         self.sam_prompt_encoder = model.sam_prompt_encoder
         self.image_size = model.image_size
+        self.use_high_res_features = model.use_high_res_features_in_sam
 
         # Positional encoding'i önceden hesapla ve buffer olarak kaydet
         with torch.no_grad():
             self.register_buffer('image_pe', self.sam_prompt_encoder.get_dense_pe())
 
-    def forward(self, image_embeddings, sparse_prompt_embeddings, dense_prompt_embeddings):
+    def forward(self, image_embeddings, sparse_prompt_embeddings, dense_prompt_embeddings,
+                high_res_feature_0, high_res_feature_1):
         """
         Args:
-            image_embeddings: Image encoder features
+            image_embeddings: Image encoder features (B, C, H, W)
             sparse_prompt_embeddings: Sparse prompt embeddings
             dense_prompt_embeddings: Dense prompt embeddings
+            high_res_feature_0: High-res feature level 0 (B, C, 4*H, 4*W)
+            high_res_feature_1: High-res feature level 1 (B, C, 2*H, 2*W)
         Returns:
             masks: (B, N, H, W) - Predicted masks
             iou_predictions: (B, N) - IoU predictions
         """
+        # High-res features'ı hazırla
+        if self.use_high_res_features:
+            # SAM decoder conv_s0 ve conv_s1 ile project et
+            feat_s0 = self.sam_mask_decoder.conv_s0(high_res_feature_0)
+            feat_s1 = self.sam_mask_decoder.conv_s1(high_res_feature_1)
+            high_res_features = [feat_s0, feat_s1]
+        else:
+            high_res_features = None
+
         low_res_masks, iou_predictions, _, _ = self.sam_mask_decoder(
             image_embeddings=image_embeddings,
             image_pe=self.image_pe,
@@ -127,7 +150,7 @@ class MaskDecoderWrapper(torch.nn.Module):
             dense_prompt_embeddings=dense_prompt_embeddings,
             multimask_output=False,
             repeat_image=False,
-            high_res_features=None,
+            high_res_features=high_res_features,
         )
 
         return low_res_masks, iou_predictions
@@ -149,12 +172,14 @@ def export_image_encoder(model, output_path, opset_version=17):
 
     # Input ve output isimleri
     input_names = ["image"]
-    output_names = ["image_embeddings"]
+    output_names = ["vision_features", "feature_0", "feature_1"]
 
     # Dynamic axes
     dynamic_axes = {
         "image": {0: "batch"},
-        "image_embeddings": {0: "batch"},
+        "vision_features": {0: "batch"},
+        "feature_0": {0: "batch"},
+        "feature_1": {0: "batch"},
     }
 
     print(f"Input shape: {dummy_input.shape}")
@@ -197,11 +222,19 @@ def export_mask_decoder(model, output_path, opset_version=17):
     dummy_sparse_embeddings = torch.randn(1, 2, embed_dim)  # 2 prompts
     dummy_dense_embeddings = torch.randn(1, embed_dim, embed_size, embed_size)
 
+    # High-resolution features
+    # feature_0: 4x resolution (256x256 for 1024x1024 input)
+    # feature_1: 2x resolution (128x128 for 1024x1024 input)
+    dummy_high_res_feature_0 = torch.randn(1, embed_dim, embed_size * 4, embed_size * 4)
+    dummy_high_res_feature_1 = torch.randn(1, embed_dim, embed_size * 2, embed_size * 2)
+
     # Input ve output isimleri
     input_names = [
         "image_embeddings",
         "sparse_prompt_embeddings",
-        "dense_prompt_embeddings"
+        "dense_prompt_embeddings",
+        "high_res_feature_0",
+        "high_res_feature_1"
     ]
     output_names = ["masks", "iou_predictions"]
 
@@ -210,6 +243,8 @@ def export_mask_decoder(model, output_path, opset_version=17):
         "image_embeddings": {0: "batch"},
         "sparse_prompt_embeddings": {0: "batch", 1: "num_prompts"},
         "dense_prompt_embeddings": {0: "batch"},
+        "high_res_feature_0": {0: "batch"},
+        "high_res_feature_1": {0: "batch"},
         "masks": {0: "batch"},
         "iou_predictions": {0: "batch"},
     }
@@ -217,12 +252,15 @@ def export_mask_decoder(model, output_path, opset_version=17):
     print(f"Image embeddings shape: {dummy_image_embeddings.shape}")
     print(f"Sparse embeddings shape: {dummy_sparse_embeddings.shape}")
     print(f"Dense embeddings shape: {dummy_dense_embeddings.shape}")
+    print(f"High-res feature 0 shape: {dummy_high_res_feature_0.shape}")
+    print(f"High-res feature 1 shape: {dummy_high_res_feature_1.shape}")
 
     # Export
     with torch.no_grad():
         torch.onnx.export(
             decoder,
-            (dummy_image_embeddings, dummy_sparse_embeddings, dummy_dense_embeddings),
+            (dummy_image_embeddings, dummy_sparse_embeddings, dummy_dense_embeddings,
+             dummy_high_res_feature_0, dummy_high_res_feature_1),
             output_path,
             input_names=input_names,
             output_names=output_names,
