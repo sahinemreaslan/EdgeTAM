@@ -132,8 +132,14 @@ def validate_image_encoder(pytorch_model, onnx_session, image_size=1024, toleran
     # PyTorch inference - ImageEncoderWrapper kullan (ONNX export ile aynı)
     print("\n🔧 PyTorch inference...")
     with torch.no_grad():
-        # Import wrapper class
-        from examples.convert_to_onnx import ImageEncoderWrapper
+        # Import wrapper class - sys.path'e ekle
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+
+        from convert_to_onnx import ImageEncoderWrapper
 
         # Wrapper oluştur
         encoder_wrapper = ImageEncoderWrapper(pytorch_model)
