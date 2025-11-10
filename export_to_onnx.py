@@ -291,8 +291,8 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="sam2/configs/edgetam.yaml",
-        help="Path to EdgeTAM config file",
+        default="configs/edgetam.yaml",
+        help="Path to EdgeTAM config file (relative to sam2 package)",
     )
     parser.add_argument(
         "--output-dir",
