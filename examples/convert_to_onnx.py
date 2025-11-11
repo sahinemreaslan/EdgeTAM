@@ -57,10 +57,9 @@ class ImageEncoderWrapper(torch.nn.Module):
         # CRITICAL: Avoid dictionary operations for ONNX export compatibility
         # Call trunk then neck directly (matches image_encoder.forward implementation)
 
-        # trunk returns dict: {"features": List[Tensor], ...}
+        # trunk returns List[Tensor] directly (not a dict!)
         # neck takes List[Tensor] and returns tuple: (features_list, pos_list)
-        trunk_dict = self.image_encoder.trunk(x)
-        trunk_features = trunk_dict["features"]  # Extract features list from dict
+        trunk_features = self.image_encoder.trunk(x)  # List[Tensor]
 
         # Neck FPN forward pass
         backbone_fpn, _ = self.image_encoder.neck(trunk_features)  # (features, pos)
