@@ -33,7 +33,8 @@ class ImageEncoderWrapper(torch.nn.Module):
     """Image Encoder için ONNX export wrapper"""
     def __init__(self, model):
         super().__init__()
-        self.image_encoder = model.image_encoder
+        # CRITICAL: Use add_module to properly register all submodules for ONNX tracing
+        self.add_module('image_encoder', model.image_encoder)
         self.use_high_res_features = model.use_high_res_features_in_sam
 
         # EdgeTAM'de high-res features için conv layers var
