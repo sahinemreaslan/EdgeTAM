@@ -38,9 +38,11 @@ class ImageEncoderWrapper(torch.nn.Module):
 
         # EdgeTAM'de high-res features için conv layers var
         # SAM2Base'deki forward_image metodunda bunlar pre-compute ediliyor
+        # IMPORTANT: add_module kullanarak ONNX exporter'ın görmesini sağla
         if self.use_high_res_features:
-            self.conv_s0 = model.sam_mask_decoder.conv_s0
-            self.conv_s1 = model.sam_mask_decoder.conv_s1
+            # Deep copy yerine direkt module olarak ekle - ONNX trace için gerekli
+            self.add_module('conv_s0', model.sam_mask_decoder.conv_s0)
+            self.add_module('conv_s1', model.sam_mask_decoder.conv_s1)
 
     def forward(self, x):
         """
