@@ -54,18 +54,19 @@ class ImageEncoderWrapper(torch.nn.Module):
             feature_0: High-res feature level 0 processed (B, C/8, H/4, W/4)
             feature_1: High-res feature level 1 processed (B, C/4, H/8, W/8)
         """
-        # CRITICAL: Call image_encoder components manually instead of calling
-        # image_encoder(x) directly. This avoids dictionary outputs that ONNX
-        # exporter struggles to trace properly.
+        # CRITICAL: Avoid dictionary operations for ONNX export compatibility
+        # Call trunk then neck directly (matches image_encoder.forward implementation)
 
-        # First, encode through trunk (backbone)
-        trunk_out = self.image_encoder.trunk(x)
-        features = trunk_out["features"]  # List of multi-scale features
+        # trunk returns dict: {"features": List[Tensor], ...}
+        # neck takes List[Tensor] and returns tuple: (features_list, pos_list)
+        trunk_dict = self.image_encoder.trunk(x)
+        trunk_features = trunk_dict["features"]  # Extract features list from dict
 
-        # Then, apply neck (FPN)
-        fpn_out = self.image_encoder.neck(features)
-        vision_features = fpn_out["vision_features"]  # Final encoded features
-        backbone_fpn = fpn_out["backbone_fpn"]  # Multi-resolution features for mask decoder
+        # Neck FPN forward pass
+        backbone_fpn, _ = self.image_encoder.neck(trunk_features)  # (features, pos)
+
+        # Vision features are the last (lowest resolution) features
+        vision_features = backbone_fpn[-1]
 
         if self.use_high_res_features:
             # SAM2Base.forward_image metodundaki gibi pre-process et
